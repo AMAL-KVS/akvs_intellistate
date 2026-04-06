@@ -1,0 +1,36 @@
+name: akvs_intellistate
+description: >
+  Production-ready Flutter state management with built-in user behavior
+  intelligence — reactive Signals, auto screen tracking, rage tap detection,
+  funnel analytics, user segmentation, retention metrics, and A/B testing.
+  Zero manual tracking calls required.
+version: 1.0.0
+homepage: https://github.com/AMAL-KVS/akvs_intellistate
+repository: https://github.com/AMAL-KVS/akvs_intellistate
+issue_tracker: https://github.com/AMAL-KVS/akvs_intellistate/issues
+
+topics:
+  - state-management
+  - signals
+  - analytics
+  - behavior
+  - flutter
+
+environment:
+  sdk: ^3.7.2
+  flutter: '>=3.29.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  meta: ^1.11.0
+  collection: ^1.18.0
+  shared_preferences: ^2.2.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
