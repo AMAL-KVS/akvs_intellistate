@@ -3,9 +3,12 @@ import 'scheduler.dart';
 import 'memory_manager.dart';
 import 'package:meta/meta.dart';
 
-import '../behavior/behavior_config.dart';
 import '../behavior/feature_tracker.dart';
 import '../behavior/screen_tracker.dart';
+import '../behavior/behavior_config.dart';
+import '../intelligence/intelligence_bridge.dart';
+import 'engine_mode.dart';
+import 'strict_mode.dart';
 
 /// Function that executes when a signal value changes.
 typedef SignalListener<T> = void Function(T value);
@@ -19,6 +22,9 @@ class Signal<T> implements ManagedSignal, SignalObserver {
   bool _initialized = false;
   final bool _autoDispose;
   bool _isDisposed = false;
+
+  /// The ID of the Rust-backed signal, if this signal is running in Hybrid mode.
+  int? _rustSignalId;
 
   /// Optional human-readable name for this signal (used by devtools & behavior).
   final String? name;
@@ -51,6 +57,20 @@ class Signal<T> implements ManagedSignal, SignalObserver {
     if (behavioral && name != null) {
       FeatureTracker.registerSignal(name!);
     }
+
+    // Register with Rust engine if active and type is supported primitive.
+    if (IntelliStateEngine.isRustActive) {
+      final rust = IntelliStateEngine.rustBridge!;
+      if (T == int) {
+        _rustSignalId = rust.createIntSignal(value as int, name: name);
+      } else if (T == double) {
+        _rustSignalId = rust.createFloatSignal(value as double, name: name);
+      } else if (T == String) {
+        _rustSignalId = rust.createStringSignal(value as String, name: name);
+      } else if (T == bool) {
+        _rustSignalId = rust.createBoolSignal(value as bool, name: name);
+      }
+    }
   }
 
   /// Internal constructor for uninitialized signals (like Computed).
@@ -81,6 +101,15 @@ class Signal<T> implements ManagedSignal, SignalObserver {
   /// Gets the current value. Throws if not initialized.
   T get value {
     checkDisposed();
+
+    if (_rustSignalId != null && IntelliStateEngine.isRustActive) {
+      final rust = IntelliStateEngine.rustBridge!;
+      if (T == int) return rust.getInt(_rustSignalId!) as T;
+      if (T == double) return rust.getFloat(_rustSignalId!) as T;
+      if (T == String) return rust.getString(_rustSignalId!) as T;
+      if (T == bool) return rust.getBool(_rustSignalId!) as T;
+    }
+
     if (!_initialized) {
       throw StateError('Signal not initialized.');
     }
@@ -93,7 +122,32 @@ class Signal<T> implements ManagedSignal, SignalObserver {
   /// all observers will be notified via the [UpdateScheduler].
   set value(T newValue) {
     checkDisposed();
+
+    // Fast path: if nothing changed, don't update
     if (_initialized && _valueInside == newValue) return;
+
+    if (_rustSignalId != null && IntelliStateEngine.isRustActive) {
+      final rust = IntelliStateEngine.rustBridge!;
+      int res = -2; // frozen
+      if (T == int) {
+        res = rust.setInt(_rustSignalId!, newValue as int);
+      } else if (T == double) {
+        res = rust.setFloat(_rustSignalId!, newValue as double);
+      } else if (T == String) {
+        res = rust.setString(_rustSignalId!, newValue as String);
+      } else if (T == bool) {
+        res = rust.setBool(_rustSignalId!, newValue as bool);
+      }
+
+      // If frozen (-2), we do not update local state or fire listeners
+      if (res < 0) {
+        if (res == -2) StrictMode.checkFrozenWrite(this);
+        return;
+      }
+    }
+
+    // Report metric to pure-dart tracker (which no-ops if Rust is in use)
+    IntelligenceBridge.instance.recordDartWrite(this);
 
     final previousValue = _valueInside;
     _valueInside = newValue;
@@ -179,6 +233,11 @@ class Signal<T> implements ManagedSignal, SignalObserver {
     if (_isDisposed) return;
     _isDisposed = true;
     _listeners.clear();
+
+    if (_rustSignalId != null && IntelliStateEngine.isRustActive) {
+      IntelliStateEngine.rustBridge!.disposeSignal(_rustSignalId!);
+      _rustSignalId = null;
+    }
     // Dependency tracker cleanup happens automatically as observers are removed.
   }
 

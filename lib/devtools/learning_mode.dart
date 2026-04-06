@@ -6,6 +6,8 @@ import '../behavior/behavior_config.dart';
 import '../behavior/behavior_reporter.dart';
 import '../behavior/feature_tracker.dart';
 import '../behavior/funnel_tracker.dart';
+import '../intelligence/intelligence_bridge.dart';
+import '../ffi/rust_bridge.dart';
 
 /// Configuration for IntelliState Learning Mode.
 class LearningModeOptions {
@@ -131,6 +133,32 @@ class LearningMode {
       '- Heaviest signal: ${_nameOf(heaviestSignal)} ($maxUpdates updates/sec)',
     );
     buf.writeln('- Active listener count: ${stats['active_listener_count']}');
+
+    // Intelligence / Health Report
+    final degraded = <String>[];
+    final frozen = <String>[];
+    _observerToSignals.values.expand((element) => element).toSet().forEach((
+      sig,
+    ) {
+      if (sig is Signal) {
+        final level = IntelligenceBridge.instance.getDegradationLevel(sig);
+        if (level == RustDegradationLevel.degraded) {
+          degraded.add(_nameOf(sig));
+        } else if (level == RustDegradationLevel.frozen) {
+          frozen.add(_nameOf(sig));
+        }
+      }
+    });
+
+    if (degraded.isNotEmpty || frozen.isNotEmpty) {
+      buf.writeln('[IntelliState] ─── Health Report ──────────────────');
+      if (degraded.isNotEmpty) {
+        buf.writeln('[IntelliState]   Degraded: ${degraded.join(', ')}');
+      }
+      if (frozen.isNotEmpty) {
+        buf.writeln('[IntelliState]   Frozen:   ${frozen.join(', ')}');
+      }
+    }
 
     // Behavior Report — only if behavior module is active
     if (AkvsBehavior.instance?.enabled == true) {

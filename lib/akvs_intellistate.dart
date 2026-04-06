@@ -24,6 +24,24 @@ export 'behavior/retention_tracker.dart';
 export 'behavior/ab_test.dart';
 export 'behavior/behavior_reporter.dart';
 
+// Hybrid Core & FFI
+export 'core/engine_mode.dart' show EngineMode, IntelliStateEngine;
+export 'core/strict_mode.dart' show StrictMode, StrictModeOptions;
+
+// Domain & Architecture Layer
+export 'domain/domain_result.dart' show DomainResult, DomainError;
+export 'domain/domain_signal.dart' show DomainSignal, Validator, Validators;
+export 'domain/domain_snapshot.dart' show DomainSnapshot;
+export 'domain/domain_store.dart' show DomainStore;
+export 'application/usecase.dart' show UseCase, NoInputUseCase;
+export 'application/controller.dart' show SignalController;
+export 'application/coordinator.dart' show FlowCoordinator, FlowResult;
+
+// Intelligence & Self-Healing
+export 'intelligence/intelligence_bridge.dart' show IntelligenceBridge;
+export 'intelligence/intelligence_tracker.dart' show DartIntelligenceTracker;
+export 'intelligence/self_healing.dart' show SelfHealingCoordinator;
+
 import 'core/scheduler.dart';
 
 /// Runs [fn] in a batch, coalescing all signal updates.

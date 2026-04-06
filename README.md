@@ -45,7 +45,12 @@ currentScreen.value = 'checkout';
 │          │                                                  │
 │  Core    │  Signal → Computed → Effect → Scheduler          │
 │  Engine  │  AsyncSignal → Watch/SignalBuilder                │
-│          │  DependencyTracker → MemoryManager                │
+│          │  EngineMode (Dart/Rust FFI) → StrictMode          │
+│          │                                                  │
+├──────────┼──────────────────────────────────────────────────┤
+│          │                                                  │
+│  Domain  │  DomainResult → DomainSignal → DomainStore        │
+│          │  UseCase → SignalController → FlowCoordinator     │
 │          │                                                  │
 ├──────────┼──────────────────────────────────────────────────┤
 │          │                                                  │
@@ -53,10 +58,10 @@ currentScreen.value = 'checkout';
 │ Intel    │  InteractionTracker → FeatureTracker              │
 │          │  FunnelTracker → UserSegmentEngine                │
 │          │  RetentionTracker → AkvsABTest                    │
-│          │  BehaviorReporter (GA4 bridge + GDPR)             │
 │          │                                                  │
 ├──────────┼──────────────────────────────────────────────────┤
-│ DevTools │  LearningMode (30s performance + behavior report) │
+│ Runtime  │  SelfHealingCoordinator → IntelligenceBridge      │
+│ Monitors │  LearningMode (Performance & Health analytics)    │
 └──────────┴──────────────────────────────────────────────────┘
 ```
 
@@ -173,6 +178,34 @@ batch(() {
   name.value = 'Reset';
   price.value = 100.0;
 });
+```
+
+### 7. High-Performance Hybrid Mode (Rust FFI)
+
+IntelliState ships with a blazing fast, memory-safe Rust core. To opt-in to zero-cost native primitive processing and automatic crash isolation:
+
+```dart
+import 'package:akvs_intellistate/akvs_intellistate.dart';
+
+void main() {
+  // Gracefully falls back to Dart if native libraries aren't bundled.
+  IntelliStateEngine.init(mode: EngineMode.rust);
+  
+  runApp(MyApp());
+}
+```
+
+### 8. Strict Domain Layer (Business Logic)
+
+Stop putting state mutations in UI widgets. Use validation-enforced domain bounds:
+
+```dart
+final age = DomainSignal(18, validators: [Validators.min(0), Validators.max(120)]);
+
+final res = age.update(-5);
+if (res.isError) {
+  print(res.error!.message); // "Value must be at least 0"
+}
 ```
 
 ---

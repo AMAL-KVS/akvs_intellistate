@@ -29,3 +29,12 @@ migrate_working_dir/
 .flutter-plugins
 .flutter-plugins-dependencies
 build/
+
+# Rust / FFI / Native related
+rust_core/target/
+rust_core/**/*.rs.bk
+native/*.so
+native/*.dylib
+native/*.dll
+example/native/
+
