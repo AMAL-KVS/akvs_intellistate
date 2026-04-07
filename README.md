@@ -45,12 +45,12 @@ currentScreen.value = 'checkout';
 │          │                                                  │
 │  Core    │  Signal → Computed → Effect → Scheduler          │
 │  Engine  │  AsyncSignal → Watch/SignalBuilder                │
-│          │  EngineMode (Dart/Rust FFI) → StrictMode          │
+│          │  EngineSelector (Dart/Rust FFI)                   │
 │          │                                                  │
 ├──────────┼──────────────────────────────────────────────────┤
 │          │                                                  │
 │  Domain  │  DomainResult → DomainSignal → DomainStore        │
-│          │  UseCase → SignalController → FlowCoordinator     │
+│          │  UseCase → StoreScope                             │
 │          │                                                  │
 ├──────────┼──────────────────────────────────────────────────┤
 │          │                                                  │
@@ -60,8 +60,9 @@ currentScreen.value = 'checkout';
 │          │  RetentionTracker → AkvsABTest                    │
 │          │                                                  │
 ├──────────┼──────────────────────────────────────────────────┤
-│ Runtime  │  SelfHealingCoordinator → IntelligenceBridge      │
-│ Monitors │  LearningMode (Performance & Health analytics)    │
+│ DevTools │  AkvsInspectorOverlay → SignalHistory             │
+│   &      │  AkvsStrictMode → LearningMode (Reactive)         │
+│ Monitors │  SelfHealingCoordinator → IntelligenceBridge      │
 └──────────┴──────────────────────────────────────────────────┘
 ```
 
@@ -87,8 +88,11 @@ dependencies:
 ```dart
 import 'package:akvs_intellistate/akvs_intellistate.dart';
 
-// Create reactive state
-final counter = aiSignal(0);
+// Create reactive state using the Fluent Builder API
+final counter = aiSignal(0)
+    .withName('counter')
+    .autoDispose();
+    
 final name = aiSignal('Flutter');
 
 // Read (auto-tracks dependencies)
@@ -195,16 +199,31 @@ void main() {
 }
 ```
 
-### 8. Strict Domain Layer (Business Logic)
-
-Stop putting state mutations in UI widgets. Use validation-enforced domain bounds:
+Stop putting unstructured state mutations directly in UI widgets. Use the robust **Domain Store** pattern for rigorous architecture out of the box:
 
 ```dart
-final age = DomainSignal(18, validators: [Validators.min(0), Validators.max(120)]);
+class CartStore extends DomainStore {
+  final items = DomainSignal<List<String>>(
+    [],
+    validate: (list) => list.length <= 5,
+    validationMessage: (_) => 'Cart is full',
+  );
+}
 
-final res = age.update(-5);
-if (res.isError) {
-  print(res.error!.message); // "Value must be at least 0"
+class AddToCartUseCase extends UseCase<String, void> {
+  @override
+  Future<void> execute(String item) async {
+    final store = DomainStore.of<CartStore>();
+    
+    // Using guard automatically updates store.isLoading and store.lastError
+    await store.guard(() async {
+      await api.addToCart(item);
+      final current = List<String>.from(store.items.value)..add(item);
+      
+      final result = store.items.update(current);
+      if (result.isError) throw Exception(result.error!.message);
+    });
+  }
 }
 ```
 
@@ -214,29 +233,30 @@ if (res.isError) {
 
 ### Setup
 
-Call `AkvsBehavior.init()` **before** `runApp()`:
+### Setup
+
+Call `AkvsIntelliState.init()` **before** `runApp()` to activate automatic tracking. Configuration is dead simple:
 
 ```dart
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  AkvsBehavior.init(
-    enabled: true,
-    trackScreens: true,
-    trackInteractions: true,
-    trackRetention: true,
-    trackSegments: true,
-    sessionGapThreshold: Duration(minutes: 30),
-    powerUserSessionThreshold: 10,
-    churnRiskDays: 7,
-    localStoragePrefix: 'myapp',  // enables persistence
+  AkvsIntelliState.init(
+    behavior: const BehaviorOptions(
+      trackScreens: true,
+      trackInteractions: true,
+      trackRetention: true,
+      trackFunnels: true,
+      localStoragePrefix: 'myapp', // Enables persistent storage
+    ),
+    strictMode: true, // Throws locally if you violate architectural bounds
   );
 
   runApp(MyApp());
 }
 ```
 
-> **Zero overhead guarantee**: If `AkvsBehavior.init()` is never called, no behavior code executes. All paths are guarded.
+> **Zero overhead guarantee**: If not configured via `init()`, no behavior code executes and features compile out completely.
 
 ### Tag Your Signals
 
@@ -424,35 +444,39 @@ This removes all keys with the configured `localStoragePrefix` from `SharedPrefe
 
 ---
 
-## 🔧 DevTools — Learning Mode
+## 🔧 DevTools — Smart Inspector & strictMode
 
-Enable real-time performance + behavior monitoring in debug builds:
+### AkvsInspectorOverlay
+Wrap your application in `AkvsInspectorOverlay` to get a floating, draggable debug HUD detailing active signals and active listeners in real-time. (Automatically disables in Release builds).
 
 ```dart
-enableLearningMode(verbose: true);
+runApp(
+  MaterialApp(
+    home: AkvsInspectorOverlay(child: MyApp()),
+  ),
+);
 ```
 
-Outputs a 30-second summary to the debug console:
+### SignalHistory (Time Travel)
+Attach history directly to your signals to unlock timeline undo/redo capabilities:
+```dart
+final formSignal = aiSignal(Form()).withHistory(size: 20);
+final history = SignalHistory(formSignal);
 
+history.ago(1);      // Reverts to previous value!
+history.replayTo(0); // Restores the very first allocated value
 ```
-[IntelliState] 📊 Summary Report (Last 30s):
-- Rebuilds prevented by batching: 4
-- Signals currently tracked: 12
-- Signals auto-disposed: 1
-- Heaviest signal: cartItems (8 updates/sec)
-- Active listener count: 6
-[IntelliState] ─── Behavior Report ────────────────
-[IntelliState]   Session:  4m 22s · engagement 0.74
-[IntelliState]   Segment:  powerUser
-[IntelliState]   Journey:  home → product → cart → checkout
-[IntelliState]   Funnels:  checkout_flow 66% inProgress
-[IntelliState]   Rage taps: addToCart (3x in 800ms) ⚠
-[IntelliState]   A/B tests: checkout_button → variant_a
-[IntelliState]   Top features: cartItems(12) userSearch(8) filter(5)
-[IntelliState]   Unused:   wishlist, share, notification_prefs
-[IntelliState]   Churn risk: 0.12 (low) · DAU streak: 3
-[IntelliState] ────────────────────────────────────
+
+### Contextual LearningMode
+Enable real-time performance optimizations in debug builds:
+
+```dart
+AkvsIntelliState.init(
+  debug: const DebugOptions(learningMode: true),
+);
 ```
+
+IntelliState will observe how your application renders, dropping **instant context-aware suggestions** into your console when anti-patterns occur (e.g. excessive rebuilds without batching, massive dependency graphs on a single observer, etc.). Warnings deduplicate iteratively per session eliminating console log spam.
 
 ---
 
@@ -462,31 +486,29 @@ Outputs a 30-second summary to the debug console:
 lib/
 ├── akvs_intellistate.dart          ← barrel exports
 ├── core/
-│   ├── signal.dart                 ← Signal<T>, aiSignal()
+│   ├── intellistate.dart           ← Unified Entrypoint mapping Config
+│   ├── signal.dart                 ← Signal<T>, aiSignal(), Fluent Builders
 │   ├── computed.dart               ← Computed<T>, computed()
 │   ├── effect.dart                 ← Effect, effect()
-│   ├── scheduler.dart              ← UpdateScheduler (batch)
+│   ├── engine/                     ← SignalEngine (Dart/Rust Fallbacks)
 │   ├── dependency_tracker.dart     ← reactive graph + _BehaviorBus
 │   └── memory_manager.dart         ← auto-dispose GC
-├── async/
-│   └── ai_async.dart               ← AsyncSignal, AsyncValue
+├── domain/
+│   ├── domain_store.dart           ← strict MVI business containers
+│   ├── domain_signal.dart          ← typed validation variables
+│   └── use_case.dart               ← orchestration units
 ├── flutter/
 │   ├── signal_builder.dart         ← SignalBuilder, Watch
 │   └── watch_extension.dart        ← context.watch()
 ├── behavior/
-│   ├── behavior_config.dart        ← AkvsBehavior.init()
+│   ├── behavior_config.dart        ← Tracker logic & rulesets
 │   ├── behavior_event.dart         ← 10 sealed event types
-│   ├── session_tracker.dart        ← session lifecycle
-│   ├── screen_tracker.dart         ← screen journeys
-│   ├── interaction_tracker.dart    ← rage taps, frustration
-│   ├── funnel_tracker.dart         ← multi-step funnels
-│   ├── feature_tracker.dart        ← signal usage heatmap
-│   ├── user_segment.dart           ← 5 user cohorts
-│   ├── retention_tracker.dart      ← DAU/WAU/MAU, churn risk
-│   ├── ab_test.dart                ← A/B testing engine
-│   └── behavior_reporter.dart      ← unified snapshot + GA4
+│   └── [10 discrete trackers]      ← (session, screen, feature, funnel etc)
 └── devtools/
-    └── learning_mode.dart          ← 30s summary reports
+    ├── signal_inspector.dart       ← AkvsInspectorOverlay HUD
+    ├── signal_history.dart         ← Time-travel debugging module
+    ├── strict_mode.dart            ← Graph mutation checks
+    └── learning_mode.dart          ← Instant console suggestions
 ```
 
 ---

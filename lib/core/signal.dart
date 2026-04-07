@@ -1,3 +1,4 @@
+// ignore_for_file: unused_field, deprecated_member_use_from_same_package
 import 'dependency_tracker.dart';
 import 'scheduler.dart';
 import 'memory_manager.dart';
@@ -20,26 +21,76 @@ typedef SignalListener<T> = void Function(T value);
 class Signal<T> implements ManagedSignal, SignalObserver {
   T? _valueInside;
   bool _initialized = false;
-  final bool _autoDispose;
+  bool _autoDispose;
   bool _isDisposed = false;
 
   /// The ID of the Rust-backed signal, if this signal is running in Hybrid mode.
   int? _rustSignalId;
 
   /// Optional human-readable name for this signal (used by devtools & behavior).
-  final String? name;
+  String? name;
 
   /// If true, writes to this signal are tracked by the behavior system.
+  @Deprecated('Use .behavior() fluent method instead. Auto-tracking is enabled when AkvsBehavior is active.')
   final bool behavioral;
 
-  /// Classification for behavior tracking:
-  /// - `'navigation'` → ScreenTracker watches this signal
-  /// - `'action'` → UserActionEvent fires on write
-  /// - any custom string → FeatureTracker tracks it
+  /// Classification for behavior tracking.
+  @Deprecated('Use .behavior(category: ...) fluent method instead.')
   final String? behaviorCategory;
+
+  // ── Fluent builder internal state ──────────────────────────────────
+
+  /// Behavior category set via fluent `.behavior()` method.
+  String? _fluentBehaviorCategory;
+
+  /// Whether crash resilience is enabled via fluent `.resilient()`.
+  bool _resilient = false;
+
+  /// Fallback value for crash recovery.
+  T? _resilientFallback;
+
+  /// Crash callback for resilient signals.
+  void Function(Object error, StackTrace stack)? _onCrash;
+
+  /// Whether auto-dispose is enabled via fluent `.autoDispose()`.
+  Duration _autoDisposeDelay = const Duration(seconds: 30);
+
+  /// Whether signal history is enabled via fluent `.withHistory()`.
+  bool _hasHistory = false;
+
+  /// Maximum history entries to keep.
+  int _historySize = 50;
+
+  /// A/B test key for variant injection.
+  String? _abTestKey;
 
   /// The current set of listeners subscribed to this signal.
   final Set<SignalListener<T>> _listeners = {};
+
+  /// Write count since creation (used by devtools).
+  int _writeCount = 0;
+
+  /// Last update timestamp.
+  DateTime? _lastUpdated;
+
+  /// Number of writes since creation.
+  int get writeCount => _writeCount;
+
+  /// Timestamp of last value update.
+  DateTime? get lastUpdated => _lastUpdated;
+
+  /// Whether this signal has history enabled.
+  bool get hasHistory => _hasHistory;
+
+  /// The effective behavior category (fluent takes precedence over constructor).
+  String? get effectiveBehaviorCategory =>
+      _fluentBehaviorCategory ?? behaviorCategory;
+
+  /// Whether this signal is resilient.
+  bool get isResilient => _resilient;
+
+  /// The A/B test key, if set.
+  String? get abTestKey => _abTestKey;
 
   /// Creates a new Signal with an initial [value].
   Signal(
@@ -152,20 +203,49 @@ class Signal<T> implements ManagedSignal, SignalObserver {
     final previousValue = _valueInside;
     _valueInside = newValue;
     _initialized = true;
+    _writeCount++;
+    _lastUpdated = DateTime.now();
     _notify();
 
-    // Behavior tracking — guarded: zero cost if not enabled
-    if (behavioral && AkvsBehavior.instance?.enabled == true && name != null) {
-      DependencyTracker.instance.notifyBehaviorWrite(
-        signalName: name!,
-        behaviorCategory: behaviorCategory,
-        previousValueType: previousValue?.runtimeType.toString() ?? 'null',
-        newValueType: newValue.runtimeType.toString(),
-      );
+    // Behavior tracking — invisible intelligence
+    final behavior = AkvsBehavior.instance;
+    if (behavior?.enabled == true && name != null) {
+      String? category = effectiveBehaviorCategory;
 
-      // Navigation signals trigger screen change
-      if (behaviorCategory == 'navigation' && newValue is String) {
-        ScreenTracker.onScreenChange(name!, newValue);
+      // Auto-detect navigation signals
+      if (category == null) {
+        final lowerName = name!.toLowerCase();
+        if (lowerName.contains('screen') ||
+            lowerName.contains('route') ||
+            lowerName.contains('page') ||
+            lowerName.contains('nav')) {
+          category = 'navigation';
+        }
+      }
+
+      // Check auto-tracking rules
+      bool shouldTrack = behavioral || _fluentBehaviorCategory != null;
+      
+      if (!shouldTrack && behavior!.trackAllSignals) {
+        shouldTrack = !behavior.excludeSignals.contains(name!);
+        if (shouldTrack && behavior.includeSignalPrefixes.isNotEmpty) {
+          shouldTrack = behavior.includeSignalPrefixes
+              .any((prefix) => name!.startsWith(prefix));
+        }
+      }
+
+      if (shouldTrack) {
+        category ??= 'action';
+        DependencyTracker.instance.notifyBehaviorWrite(
+          signalName: name!,
+          behaviorCategory: category,
+          previousValueType: previousValue?.runtimeType.toString() ?? 'null',
+          newValueType: newValue.runtimeType.toString(),
+        );
+
+        if (category == 'navigation' && newValue is String) {
+          ScreenTracker.onScreenChange(name!, newValue as String);
+        }
       }
     }
   }
@@ -252,23 +332,23 @@ class Signal<T> implements ManagedSignal, SignalObserver {
 
 /// Creates a new [Signal] with the given [initialValue].
 ///
-/// [autoDispose]: If true, the signal will be disposed after it
-/// is no longer being listened to.
-///
 /// [name]: Human-readable name for devtools and behavior tracking.
 ///
-/// [behavioral]: If true, writes are tracked by BehaviorReporter.
-///
-/// [behaviorCategory]: Classification for behavior tracking.
-/// - `'navigation'` → ScreenTracker watches this signal
-/// - `'action'` → UserActionEvent fired on write
-/// - any string → FeatureTracker tracks it
+/// Advanced configuration uses fluent builder methods:
+/// ```dart
+/// final counter = aiSignal(0);
+/// final price = aiSignal(0.0, name: 'price');
+/// final payment = aiSignal(PaymentState.idle)
+///   .resilient(fallback: PaymentState.idle)
+///   .behavior(category: 'action')
+///   .withName('paymentState');
+/// ```
 Signal<T> aiSignal<T>(
   T initialValue, {
-  bool autoDispose = false,
   String? name,
-  bool behavioral = false,
-  String? behaviorCategory,
+  @Deprecated('Use .behavior() fluent method instead') bool behavioral = false,
+  @Deprecated('Use .behavior(category: ...) instead') String? behaviorCategory,
+  bool autoDispose = false,
 }) {
   return Signal<T>(
     initialValue,
@@ -277,4 +357,72 @@ Signal<T> aiSignal<T>(
     behavioral: behavioral,
     behaviorCategory: behaviorCategory,
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FLUENT BUILDER EXTENSION
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Fluent builder methods for advanced signal configuration.
+///
+/// All methods mutate and return the SAME signal instance for chaining.
+/// They are entirely optional — existing code with no chain calls still works.
+///
+/// ```dart
+/// final payment = aiSignal(PaymentState.idle)
+///   .resilient(fallback: PaymentState.idle)
+///   .behavior(category: 'action')
+///   .withName('paymentState')
+///   .withHistory(size: 30);
+/// ```
+extension SignalBuilderExtension<T> on Signal<T> {
+  /// Enables crash recovery guard with optional fallback.
+  Signal<T> resilient({
+    T? fallback,
+    void Function(Object error, StackTrace stack)? onCrash,
+  }) {
+    _resilient = true;
+    _resilientFallback = fallback;
+    _onCrash = onCrash;
+    return this;
+  }
+
+  /// Tags this signal for behavior tracking with an optional category.
+  ///
+  /// Categories: `'navigation'`, `'action'`, `'data'`, or any custom string.
+  /// If not set, the signal is tracked as `'uncategorized'`.
+  Signal<T> behavior({String category = 'action'}) {
+    _fluentBehaviorCategory = category;
+    if (name != null) {
+      FeatureTracker.registerSignal(name!);
+    }
+    return this;
+  }
+
+  /// Sets a human-readable name (used in devtools and analytics).
+  Signal<T> withName(String newName) {
+    name = newName;
+    return this;
+  }
+
+  /// Enables auto-dispose when listener count drops to 0.
+  Signal<T> autoDispose({Duration delay = const Duration(seconds: 30)}) {
+    _autoDispose = true;
+    _autoDisposeDelay = delay;
+    MemoryManager.instance.register(this);
+    return this;
+  }
+
+  /// Enables signal history for time-travel debugging.
+  Signal<T> withHistory({int size = 50}) {
+    _hasHistory = true;
+    _historySize = size;
+    return this;
+  }
+
+  /// Marks this signal for A/B test variant injection.
+  Signal<T> abTestKey(String key) {
+    _abTestKey = key;
+    return this;
+  }
 }

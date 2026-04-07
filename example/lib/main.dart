@@ -4,68 +4,43 @@ import 'package:akvs_intellistate/akvs_intellistate.dart';
 
 // ─── Global Behavioral Signals ───────────────────────────────────────
 
-final currentScreen = aiSignal(
-  'home',
-  name: 'currentScreen',
-  behavioral: true,
-  behaviorCategory: 'navigation',
-);
+final currentScreen = aiSignal('home', name: 'currentScreen')
+    .behavior(category: 'navigation');
 
-final addToCartTaps = aiSignal(
-  0,
-  name: 'addToCart',
-  behavioral: true,
-  behaviorCategory: 'action',
-);
+final addToCartTaps = aiSignal(0, name: 'addToCart')
+    .behavior(category: 'action');
 
-final userSearch = aiSignal(
-  '',
-  name: 'userSearch',
-  behavioral: true,
-  behaviorCategory: 'action',
-);
+final userSearch = aiSignal('', name: 'userSearch')
+    .behavior(category: 'action');
 
-final filterSelection = aiSignal(
-  'all',
-  name: 'filter',
-  behavioral: true,
-  behaviorCategory: 'action',
-);
+final filterSelection = aiSignal('all', name: 'filter')
+    .behavior(category: 'action');
 
 // Unused behavioral signals (to demonstrate "unused" tracking)
-final wishlist = aiSignal(
-  <String>[],
-  name: 'wishlist',
-  behavioral: true,
-  behaviorCategory: 'action',
-);
+final wishlist = aiSignal(<String>[], name: 'wishlist')
+    .behavior(category: 'action');
 
-final shareAction = aiSignal(
-  0,
-  name: 'share',
-  behavioral: true,
-  behaviorCategory: 'action',
-);
+final shareAction = aiSignal(0, name: 'share')
+    .behavior(category: 'action');
 
-final notificationPrefs = aiSignal(
-  false,
-  name: 'notification_prefs',
-  behavioral: true,
-  behaviorCategory: 'action',
-);
+final notificationPrefs = aiSignal(false, name: 'notification_prefs')
+    .behavior(category: 'action');
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  enableLearningMode(verbose: true);
-
-  AkvsBehavior.init(
-    enabled: true,
-    trackScreens: true,
-    trackInteractions: true,
-    trackRetention: true,
-    sessionGapThreshold: const Duration(minutes: 5), // short for demo
-    localStoragePrefix: 'akvs_demo',
+  AkvsIntelliState.init(
+    debug: const DebugOptions(
+      learningMode: true,
+      signalInspector: true,
+    ),
+    behavior: const BehaviorOptions(
+      trackScreens: true,
+      trackInteractions: true,
+      trackRetention: true,
+      sessionGapThreshold: Duration(minutes: 5), // short for demo
+      localStoragePrefix: 'akvs_demo',
+    ),
   );
 
   // Define a demo funnel
@@ -102,7 +77,9 @@ void main() {
   runApp(
     const MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: IntelliStateDemo(),
+      home: AkvsInspectorOverlay(
+        child: IntelliStateDemo(),
+      ),
     ),
   );
 }
@@ -122,6 +99,7 @@ class _IntelliStateDemoState extends State<IntelliStateDemo> {
     const AsyncScreen(),
     const TodoScreen(),
     const BehaviorDashboard(),
+    const DomainStoreScreen(),
   ];
 
   @override
@@ -135,7 +113,7 @@ class _IntelliStateDemoState extends State<IntelliStateDemo> {
         onTap: (i) {
           setState(() => _currentIndex = i);
           // Update navigation signal
-          final screenNames = ['home', 'async', 'todos', 'behavior'];
+          final screenNames = ['home', 'async', 'todos', 'behavior', 'domain'];
           currentScreen.value = screenNames[i];
         },
         items: const [
@@ -146,6 +124,7 @@ class _IntelliStateDemoState extends State<IntelliStateDemo> {
             icon: Icon(Icons.analytics),
             label: 'Behavior',
           ),
+          BottomNavigationBarItem(icon: Icon(Icons.store), label: 'Domain'),
         ],
       ),
     );
@@ -355,15 +334,9 @@ class Todo {
   Todo(this.id, this.text, this.done);
 }
 
-class TodoScreen extends StatefulWidget {
-  const TodoScreen({super.key});
-  @override
-  State<TodoScreen> createState() => _TodoScreenState();
-}
-
-class _TodoScreenState extends State<TodoScreen> {
-  final todos = aiSignal<List<Todo>>([]);
-  final filter = aiSignal(TodoFilter.all);
+class TodoStore extends DomainStore {
+  late final todos = aiSignal<List<Todo>>([]).behavior(category: 'content');
+  late final filter = aiSignal(TodoFilter.all).behavior(category: 'navigation');
 
   late final filtered = computed(() {
     final list = todos();
@@ -378,91 +351,125 @@ class _TodoScreenState extends State<TodoScreen> {
   late final allDone = computed(
     () => todos().isNotEmpty && todos().every((t) => t.done),
   );
+}
 
+class AddTodoUseCase extends UseCase<String, void> {
+  @override
+  Future<void> execute(String text) async {
+    final store = DomainStore.of<TodoStore>();
+    await store.guard(() async {
+      if (text.isEmpty) return;
+      store.todos.update(
+        (list) => [
+          ...list,
+          Todo(DateTime.now().toIso8601String(), text, false),
+        ],
+      );
+    });
+  }
+}
+
+class ToggleTodoUseCase extends UseCase<Todo, void> {
+  @override
+  Future<void> execute(Todo todo) async {
+    final store = DomainStore.of<TodoStore>();
+    await store.guard(() async {
+      store.todos.update(
+        (l) => [
+          for (final t in l)
+            if (t.id == todo.id) Todo(t.id, t.text, !t.done) else t,
+        ],
+      );
+    });
+  }
+}
+
+class TodoScreen extends StatefulWidget {
+  const TodoScreen({super.key});
+  @override
+  State<TodoScreen> createState() => _TodoScreenState();
+}
+
+class _TodoScreenState extends State<TodoScreen> {
   final controller = TextEditingController();
+  final addTodo = AddTodoUseCase();
+  final toggleTodo = ToggleTodoUseCase();
+
+  @override
+  void initState() {
+    super.initState();
+    if (!DomainStore.isRegistered<TodoStore>()) {
+      TodoStore().register();
+    }
+  }
 
   void _addTodo() {
-    if (controller.text.isEmpty) return;
-    todos.update(
-      (list) => [
-        ...list,
-        Todo(DateTime.now().toIso8601String(), controller.text, false),
-      ],
-    );
+    addTodo(controller.text);
     controller.clear();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Todo List Demo')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    decoration: const InputDecoration(hintText: 'What to do?'),
+      final store = DomainStore.of<TodoStore>();
+      return Scaffold(
+        appBar: AppBar(title: const Text('Todo List Demo')),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      decoration: const InputDecoration(hintText: 'What to do?'),
+                    ),
                   ),
-                ),
-                IconButton(onPressed: _addTodo, icon: const Icon(Icons.add)),
-              ],
+                  IconButton(onPressed: _addTodo, icon: const Icon(Icons.add)),
+                ],
+              ),
             ),
-          ),
-          Watch(
-            (context) => Wrap(
-              spacing: 8,
-              children:
-                  TodoFilter.values
-                      .map(
-                        (f) => ChoiceChip(
-                          label: Text(f.name.toUpperCase()),
-                          selected: filter() == f,
-                          onSelected: (s) => filter.value = f,
+            Watch(
+              (context) => Wrap(
+                spacing: 8,
+                children:
+                    TodoFilter.values
+                        .map(
+                          (f) => ChoiceChip(
+                            label: Text(f.name.toUpperCase()),
+                            selected: store.filter() == f,
+                            onSelected: (s) => store.filter.value = f,
+                          ),
+                        )
+                        .toList(),
+              ),
+            ),
+            Watch(
+              (context) =>
+                  store.allDone()
+                      ? Container(
+                        width: double.infinity,
+                        color: Colors.greenAccent,
+                        padding: const EdgeInsets.all(8),
+                        child: const Text(
+                          '🎉 ALL DONE!',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                       )
-                      .toList(),
+                      : const SizedBox.shrink(),
             ),
-          ),
-          Watch(
-            (context) =>
-                allDone()
-                    ? Container(
-                      width: double.infinity,
-                      color: Colors.greenAccent,
-                      padding: const EdgeInsets.all(8),
-                      child: const Text(
-                        '🎉 ALL DONE!',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    )
-                    : const SizedBox.shrink(),
-          ),
-          Expanded(
-            child: Watch((context) {
-              final list = filtered();
-              return ListView.builder(
-                itemCount: list.length,
-                itemBuilder: (context, i) {
-                  final todo = list[i];
-                  return ListTile(
-                    leading: Checkbox(
-                      value: todo.done,
-                      onChanged: (v) {
-                        todos.update(
-                          (l) => [
-                            for (final t in l)
-                              if (t.id == todo.id)
-                                Todo(t.id, t.text, v!)
-                              else
-                                t,
-                          ],
-                        );
-                      },
+            Expanded(
+              child: Watch((context) {
+                final list = store.filtered();
+                return ListView.builder(
+                  itemCount: list.length,
+                  itemBuilder: (context, i) {
+                    final todo = list[i];
+                    return ListTile(
+                      leading: Checkbox(
+                        value: todo.done,
+                        onChanged: (v) => toggleTodo(todo),
                     ),
                     title: Text(
                       todo.text,
@@ -878,4 +885,100 @@ class BehaviorDashboard extends StatelessWidget {
     ),
     child: Text(label, style: const TextStyle(fontSize: 12)),
   );
+}
+
+// ─── SCREEN 7: DOMAIN STORE DEMO ─────────────────────────────
+class CartStore extends DomainStore {
+  final items = DomainSignal<List<String>>(
+    [], 
+    validate: (list) => list.length <= 5,
+    validationMessage: (_) => 'Cart is full (max 5 items)',
+  );
+
+  final cartHistory = SignalHistory(aiSignal(0));
+
+  @override
+  void reset() {
+    super.reset();
+    items.forceUpdate([]);
+  }
+}
+
+class AddToCartUseCase extends UseCase<String, void> {
+  @override
+  Future<void> execute(String item) async {
+    final store = DomainStore.of<CartStore>();
+    
+    await store.guard(() async {
+      await Future.delayed(const Duration(milliseconds: 500)); // fake network
+      
+      final currentList = List<String>.from(store.items.value);
+      currentList.add(item);
+      
+      final res = store.items.update(currentList);
+      if (res.isError) {
+        throw Exception(res.error!.message);
+      }
+    });
+  }
+}
+
+class DomainStoreScreen extends StatefulWidget {
+  const DomainStoreScreen({super.key});
+
+  @override
+  State<DomainStoreScreen> createState() => _DomainStoreScreenState();
+}
+
+class _DomainStoreScreenState extends State<DomainStoreScreen> {
+  @override
+  void initState() {
+    super.initState();
+    if (!DomainStore.isRegistered<CartStore>()) {
+      CartStore().register();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!DomainStore.isRegistered<CartStore>()) {
+      return const SizedBox();
+    }
+
+    final store = DomainStore.of<CartStore>();
+    final addToCart = AddToCartUseCase();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Domain Store Strict UI')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Watch((context) {
+              if (store.isLoading.value) {
+                return const CircularProgressIndicator();
+              }
+              if (store.lastError.value != null) {
+                return Text(
+                  'Error: ${store.lastError.value}',
+                  style: const TextStyle(color: Colors.red),
+                );
+              }
+              return Text(
+                'Cart Items: ${store.items.value.join(', ')}',
+                style: const TextStyle(fontSize: 24),
+              );
+            }),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                addToCart('Item ${store.items.value.length + 1}');
+              },
+              child: const Text('Add to Cart (Network Call)'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

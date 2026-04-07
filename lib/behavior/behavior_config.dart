@@ -45,6 +45,15 @@ class AkvsBehavior {
   /// shared_preferences under this key prefix.
   final String? localStoragePrefix;
 
+  /// If true, ALL named signals are automatically tracked unless explicitly excluded.
+  final bool trackAllSignals;
+
+  /// Signal names to explicitly exclude from automatic tracking.
+  final List<String> excludeSignals;
+
+  /// If provided, only signals with these prefixes will be auto-tracked.
+  final List<String> includeSignalPrefixes;
+
   AkvsBehavior._({
     required this.enabled,
     required this.trackScreens,
@@ -54,6 +63,9 @@ class AkvsBehavior {
     required this.sessionGapThreshold,
     required this.powerUserSessionThreshold,
     required this.churnRiskDays,
+    required this.trackAllSignals,
+    this.excludeSignals = const [],
+    this.includeSignalPrefixes = const [],
     this.localStoragePrefix,
   });
 
@@ -75,6 +87,9 @@ class AkvsBehavior {
     Duration sessionGapThreshold = const Duration(minutes: 30),
     int powerUserSessionThreshold = 10,
     int churnRiskDays = 7,
+    bool trackAllSignals = true,
+    List<String> excludeSignals = const [],
+    List<String> includeSignalPrefixes = const [],
     String? localStoragePrefix,
   }) {
     _instance = AkvsBehavior._(
@@ -86,6 +101,9 @@ class AkvsBehavior {
       sessionGapThreshold: sessionGapThreshold,
       powerUserSessionThreshold: powerUserSessionThreshold,
       churnRiskDays: churnRiskDays,
+      trackAllSignals: trackAllSignals,
+      excludeSignals: excludeSignals,
+      includeSignalPrefixes: includeSignalPrefixes,
       localStoragePrefix: localStoragePrefix,
     );
 

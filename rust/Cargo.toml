@@ -1,0 +1,12 @@
+[package]
+name = "akvs_signal_engine"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal Rust signal store scaffold for AKVS IntelliState FFI"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# No dependencies — pure std only for the scaffold
